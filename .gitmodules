@@ -1,0 +1,3 @@
+[submodule "OpenSees"]
+	path = OpenSees
+	url = https://github.com/OpenSees/OpenSees.git
