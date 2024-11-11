@@ -1,5 +1,6 @@
 import numpy as np
 import math
+import pprint
 
 '''
 In python, mutable vars are called by reference inside funcs.
@@ -23,9 +24,9 @@ c_G0 = 200.
 c_kappa = 0.008
 c_h = 1.8
 c_M = 1.25
-c_dre1 = 0.6
+c_dre1 = 0.35
 c_dre2 = 30.
-c_dir = 1.4
+c_dir = 0.75
 c_alpha = 20. # "eta"
 c_gammadr = 0.05 # "rdr"
 c_np = 1.1
@@ -45,7 +46,7 @@ c_tolerance_dgamma = 0.001 # to determin the number of substeps
 c_1_3 = 1./3.
 c_I = np.identity(3)
 
-c_max_iteration = 1e5
+c_max_iteration = 1e3
 
 
 ### CycLiq Class ### --------------------------------------------------------
@@ -77,6 +78,8 @@ class CycLiq:
     self.gtheta = None # scalar, value of interpolation g when lode angle theta
     self.G = None # scalar
     self.K = None # scalar
+    self.strn_vol_ir_pre = 0.
+    self.strn_vol_re_pre = 0.
 
     # Const during whole simulation
     self.c_ein = a_c_ein
@@ -101,8 +104,8 @@ class CycLiq:
     if self.M_max<c_tolerance_pmin:
       self.M_max = c_tolerance_pmin
 
-    self.strn_vol_ir_pre = 0. # used to calculate chi
-    self.strn_vol_re_pre = 0.
+    self.strn_vol_ir_reversal = 0. # the value at last load reversal, used to calc. chi
+    self.gammamono = 0 # shear strain since the last load reversal, used to calc. irreversal dilatancy
 
     # Most variables are initialized in self.calc_init_classvar() 
     #  which is called in the beginning of every step.
@@ -223,7 +226,6 @@ class CycLiq:
     self.dila_ir = None # scalar
     self.chi = None # scalar, releasing reversible dilatancy
     self.dila_all = None # scalar
-    self.gammamono = None # scalar, init inside constructor?
     self.loadindex = None # scalar, loading index, L, "lambda", NOT "loadindex"
     self.plast_modul = None # scalar, plastic modulus, H, Kp
     self.Normal = None # np.zeros((3,3))
@@ -260,7 +262,11 @@ class CycLiq:
   ### -----------------------------------------
   def set_p(self, a_elast_vol_strain):
     if a_elast_vol_strain>self.strn_vol_c_0:
+      '''
       self.p_now = c_pat*((self.c_pin/c_pat)**0.5+(1+self.c_ein)*0.5/c_kappa*a_elast_vol_strain)**2
+      '''
+
+      self.p_now = c_pat*((self.p_pre/c_pat)**0.5+(1+self.c_ein)*0.5/c_kappa*a_elast_vol_strain)**2
     else:
       self.p_now = c_pmin
     #self.set_GK((self.p_pre+self.p_now)*0.5)
@@ -286,7 +292,7 @@ class CycLiq:
   ### -----------------------------------------
   def set_psi(self):
     # critical state parameters
-    t_e_pre = (1+self.c_ein)*math.exp(self.strn_vol_pre) # en
+    t_e_pre = (1+self.c_ein)*math.exp(-self.strn_vol_pre) - 1. # en
     t_ec = c_e0-c_lambdac*(self.p_pre/c_pat)**c_xi 
     self.psi = t_e_pre-t_ec
 
@@ -322,14 +328,20 @@ class CycLiq:
       t_sin3theta = 1.
     elif t_sin3theta<-1.:
       t_sin3theta = -1.
-    return 1/(1+self.M_peak*(t_sin3theta+t_sin3theta**2)/6+(self.M_peak/self.M_peako-1)*(1-t_sin3theta**2))
+    #return 1/(1+self.M_peak*(t_sin3theta+t_sin3theta**2)/6+(self.M_peak/self.M_peako-1)*(1-t_sin3theta**2))
+    return 1.
 
   ### -----------------------------------------
   def get_yield_func(self, a_dev_strs_ratio): # dev. stress ratio (r)
     t_norm = np.tensordot(a_dev_strs_ratio,a_dev_strs_ratio)**0.5
     t_Normal = np.zeros((3,3)) if t_norm==0 else a_dev_strs_ratio/t_norm
     t_gtheta = self.get_gtheta(t_Normal)
-    return self.M_max*t_gtheta-1.5**0.5*t_norm
+    t_1 = (2/3.)**0.5*self.M_max*t_gtheta-t_norm
+    t_2 = np.tensordot((2/3.)**0.5*self.M_max*t_gtheta*t_Normal-a_dev_strs_ratio,t_Normal).item()
+    #return (2/3.)**0.5*self.M_max*t_gtheta-t_norm
+    #print(np.tensordot(t_Normal,t_Normal),np.tensordot(a_dev_strs_ratio,t_Normal)-t_norm)
+    #print(t_1, t_2)
+    return t_2
 
   '''
   def set_strn_vol_c_0(self):
@@ -342,12 +354,12 @@ class CycLiq:
     if np.tensordot(self.r_pre,self.r_pre)<c_tolerance_pmin and \
        np.tensordot(self.r_alpha,self.r_alpha)<c_tolerance_pmin:
     '''
-    if np.tensordot(self.r_pre,self.r_pre)<c_tolerance_pmin**2 and \
-       np.tensordot(self.r_alpha,self.r_alpha)<c_tolerance_pmin**2:
+    if np.tensordot(self.r_pre,self.r_pre)<c_tolerance_pmin and \
+       np.tensordot(self.r_alpha,self.r_alpha)<c_tolerance_pmin:
       self.r_bar = (2/15)**0.5*c_M*math.exp(-c_np*self.psi)*np.array([[2,0,0],[0,-1,0],[0,0,-1]])
       self.r_dist_ratio = 1.e20
       # return 0
-    elif np.tensordot(self.r_pre-self.r_alpha,self.r_pre-self.r_alpha)<c_tolerance_pmin**2:
+    elif np.tensordot(self.r_pre-self.r_alpha,self.r_pre-self.r_alpha)<c_tolerance_pmin:
       self.r_bar = (2/3.)**0.5*self.M_max*self.gtheta/np.tensordot(self.r_pre,self.r_pre)*self.r_pre
       self.r_dist_ratio = 1.e20
       # return 0
@@ -355,7 +367,7 @@ class CycLiq:
     ### Pegasus procedure
 
       ### PP 1. Initialization
-      p_beta0 = 0.
+      p_beta0 = 0. if np.tensordot(self.r_alpha,self.r_alpha)>c_tolerance_pmin else 0.01
       p_beta1 = 1.
       p_rbar0 = (1-p_beta0)*self.r_alpha+p_beta0*self.r_pre
       p_rbar1 = (1-p_beta1)*self.r_alpha+p_beta1*self.r_pre
@@ -383,7 +395,7 @@ class CycLiq:
         self.r_dist_ratio = p_beta0
         # return 0
       else:
-        i_while1 = 1
+        i_PP_while1 = 1
         while p_Fm0*p_Fm1>0:
 
       ### PP 2. 
@@ -395,10 +407,14 @@ class CycLiq:
           p_Fm0 = self.get_yield_func(p_rbar0)
           p_Fm1 = self.get_yield_func(p_rbar1)
 
+          i_PP_while1 += 1
+          if i_PP_while1 > c_max_iteration:
+            raise Exception("PP_while1")
+
       ### PP 4. 
         if abs(p_Fm1)<c_tolerance_yield:
           self.r_bar = p_rbar1.copy()
-          self.Normal = p_rbar1/np.tensordot(p_rbar1,p_rbar1)**0.5
+          self.Normal = p_rbar/np.tensordot(p_rbar,p_rbar)**0.5
           self.r_dist_ratio = p_beta1
           # return 0
         elif abs(p_Fm0)<c_tolerance_yield:
@@ -406,11 +422,13 @@ class CycLiq:
           self.Normal =
           '''
           self.r_bar = p_rbar0.copy()
+          self.Normal = p_rbar/np.tensordot(p_rbar,p_rbar)**0.5
           self.r_dist_ratio = p_beta0
           # return 0
         else:
           p_beta = p_beta1-p_Fm1*(p_beta1-p_beta0)/(p_Fm1-p_Fm0)
           p_rbar = (1-p_beta)*self.r_alpha+p_beta*self.r_pre
+          self.Normal = p_rbar/np.tensordot(p_rbar,p_rbar)**0.5
           p_Fm = self.get_yield_func(p_rbar)
 
       ### PP 5. 
@@ -431,23 +449,21 @@ class CycLiq:
             p_rbar = (1-p_beta)*self.r_alpha+p_beta*self.r_pre
             p_Fm = self.get_yield_func(p_rbar)
 
+            i_PP_while2 += 1
+            if i_PP_while2 > c_max_iteration:
+              raise Exception("PP_while2")
+
           self.r_bar = p_rbar0.copy()
+          self.Normal = p_rbar/np.tensordot(p_rbar,p_rbar)**0.5
           self.r_dist_ratio = p_beta0
-
-          i_PP_while2 += 1
-          if i_PP_while2 > c_max_iteration:
-            raise Exception("PP_while2")
-
-        i_PP_while1 += 1
-        if i_PP_while1 > c_max_iteration:
-          raise Exception("PP_while1")
 
   ### -----------------------------------------
   def set_dilatancy(self):
     self.r_d = c_M*math.exp(c_nd*self.psi)/self.M_max*self.r_bar
     self.dila_re = (2./3.)**0.5*c_dre1*np.tensordot(self.r_d-self.r_pre,self.Normal)
-    if self.strn_vol_ir_pre>c_tolerance_pmin:
-      self.chi = -c_dir*self.strn_vol_re_pre/self.strn_vol_ir_pre
+    if self.strn_vol_ir_reversal>c_tolerance_pmin:
+      #self.chi = -c_dir*self.strn_vol_re_pre/self.strn_vol_ir_pre
+      self.chi = -c_dir*self.strn_vol_re_pre/self.strn_vol_ir_reversal
     else:
       self.chi = 0
     '''
@@ -457,15 +473,23 @@ class CycLiq:
       self.chi = 1.
     self.dila_ir = 0
     if self.dila_re>0:
-      self.dila_ir += self.dila_re/c_dre1*math.exp(self.chi)
-    #if self.dila_re>0:
-      self.dila_re = (c_dre1*self.chi)**2/self.p_pre
+      self.dila_re = (c_dre2*self.chi)**2/self.p_pre
+    t1 = c_dir*math.exp(c_nd*self.psi-c_alpha*self.strn_vol_ir_pre)
+    t2 = (2/3.)**0.5*np.tensordot(self.r_d-self.r_pre,self.Normal)*math.exp(self.chi)
+    t3 = (c_gammadr*(1-math.exp(c_nd*self.psi))/(c_gammadr*(1-math.exp(c_nd*self.psi))+self.gammamono))**2
+    if self.dila_re>0:
+      if self.psi>0:
+        self.dila_ir = t1*t2
+      else:
+        self.dila_ir = t1*(t2+t3)
       '''
       if -epsvre_ns<tolerance: dre_n=0
       '''
-    if self.psi<0:
-      self.dila_ir += (c_gammadr*(1-math.exp(c_nd*self.psi))/(c_gammadr*(1-math.exp(c_nd*self.psi))+self.gammamono))**2
-    self.dila_ir *= c_dir*math.exp(c_nd*self.psi-c_alpha*self.strn_vol_ir_pre)
+    else:
+      if self.psi>0:
+        self.dila_ir = 0
+      else:
+        self.dila_ir = t1*t3
     '''
     strn_vol_ir_pre's'?
     '''
@@ -494,16 +518,18 @@ class CycLiq:
 
     ### sub 3. Consistency condition
     s_rn = np.tensordot(self.r_pre,self.Normal)
-    self.phi = np.tensordot(a_dStrn_dev,self.Normal)-(self.p_now-self.p_pre)*s_rn
+    self.phi = np.tensordot(self.Strs_dev_now-self.Strs_dev_pre,self.Normal)-(self.p_now-self.p_pre)*s_rn
     t_phi_n = np.tensordot(self.r_now-self.r_pre,self.Normal)
-
+    # load reversal
     if self.phi<c_tolerance_pmin or t_phi_n<c_tolerance_pmin:
       self.gammamono = 0.
       self.r_alpha = self.r_pre
+      self.strn_vol_ir_reversal = self.strn_vol_ir_pre
       '''
       self.strn_vol_pre = epsvir_now
       '''
       self.set_elast_state()
+      #print('Alpha relocated :', self.r_alpha)
 
     else:
     ### sub 4. Plastic correction
@@ -512,12 +538,12 @@ class CycLiq:
       self.strn_vol_c_now = 
       if roubar>tolerance?
       '''
-      self.plast_modul = 1.5*c_h*self.gtheta*self.G*math.exp(-c_np*self.psi)* \
+      self.plast_modul = 2/3.*c_h*self.gtheta*self.G*math.exp(-c_np*self.psi)* \
                           (c_M*math.exp(-c_np*self.psi)/self.M_max*self.r_dist_ratio-1.)
-      '''
-      if H<tolerance
-        H = tolerance
-      '''
+      if self.plast_modul<c_tolerance_pmin and self.plast_modul>=0:
+        self.plast_modul = c_tolerance_pmin
+      elif self.plast_modul>-c_tolerance_pmin and self.plast_modul<0:
+        self.plast_modul = -c_tolerance_pmin
       self.set_dilatancy()
       t_iconv = False
       t_loadindex_max = 0
@@ -538,7 +564,7 @@ class CycLiq:
         self.Strs_dev_now = self.Strs_dev_pre+2.*self.G*(a_dStrn_dev-s_dStrn_dev_p)
 
     ### sub 5. Convergence of consistency condition
-        self.phi = np.tensordot(a_dStrn_dev,self.Normal)-\
+        self.phi = np.tensordot(self.Strs_dev_now-self.Strs_dev_pre,self.Normal)-\
                     (self.p_now-self.p_pre)*s_rn-self.loadindex*self.plast_modul
 
         if self.phi<-c_tolerance_pmin:
@@ -556,6 +582,7 @@ class CycLiq:
         if i_while3 > c_max_iteration:
           raise Exception("while3")
       # End while
+      self.gammamono += self.loadindex
 
     ### sub 6. Update variables
       '''
@@ -573,6 +600,7 @@ class CycLiq:
   def calc_mainstep(self, a_dStrn):
     self.set_mainstep_next_Strain(a_dStrn)
     self.init_mainstep()
+    self.strn_vol_c_0 = -2*c_kappa/(1+self.c_ein)*((self.p_pre/c_pat)**0.5-(c_pmin/c_pat)**0.5)
 
     ### trial before substep
     self.add_elast_increment(self.strn_vol_now-self.strn_vol_pre, self.Strn_dev_now-self.Strn_dev_pre)
