@@ -23,10 +23,13 @@ i_name : count variables (local)
 c_G0 = 200.
 c_kappa = 0.008
 c_h = 1.8
-c_M = 1.25
-c_dre1 = 0.35
+#c_M = 1.25 # Toyoura a
+c_M = 1.35 # Toyoura b
+#c_dre2 = 0.6 # Toyoura a
+c_dre1 = 0.35 # Toyoura b
 c_dre2 = 30.
-c_dir = 0.75
+#c_dir = 1.4 # Toyoura a
+c_dir = 0.75 # Toyoura b
 c_alpha = 20. # "eta"
 c_gammadr = 0.05 # "rdr"
 c_np = 1.1
@@ -47,7 +50,7 @@ c_tolerance_L = 1e-5
 c_1_3 = 1./3.
 c_I = np.identity(3)
 
-c_max_iteration = 1e3
+c_max_iteration = 5e2
 
 
 ### CycLiq Class ### --------------------------------------------------------
@@ -55,7 +58,24 @@ c_max_iteration = 1e3
 class CycLiq:
   
   ### constructor ### ---------------------------- {
-  def __init__(self, a_Strs_in, a_c_ein):
+  def __init__(self, a_Strs_in, a_c_ein, \
+               DEBUG=False, debug_vars=None):
+    # Debug mode
+    self.DEBUG = DEBUG
+    if DEBUG:
+      a_strn_vol_ir_pre = debug_vars[0]
+      a_strn_vol_re_pre = debug_vars[1]
+      a_strn_vol_c_0 = debug_vars[2]
+      a_strn_vol_c_pre = debug_vars[3]
+      a_r_alpha =  np.array([[debug_vars[4], debug_vars[5], debug_vars[6]], \
+                             [debug_vars[7], debug_vars[8], debug_vars[9]], \
+                             [debug_vars[10], debug_vars[11], debug_vars[12]]])
+      a_M_max = debug_vars[13]
+      a_strn_vol_ir_reversal = debug_vars[14]
+      a_gammamono = debug_vars[15]
+      a_strn_vol_pre = debug_vars[16]
+      a_psi = debug_vars[17]
+
     # Updated only in the end of each main step and const during each step
     self.Strs_pre = a_Strs_in
     self.Strn_pre = np.zeros((3,3))
@@ -68,8 +88,8 @@ class CycLiq:
     self.r_pre = (a_Strs_in-self.p_pre*c_I)/self.p_pre
 
     # Updated in the end of each substep and const during each step
-    self.strn_vol_pre = 0.
-    self.Strn_dev_pre = np.zeros((3,3))
+    self.strn_vol_pre = a_strn_vol_pre if DEBUG else np.trace(self.Strn_pre)/3.
+    self.Strn_dev_pre = self.Strn_pre-self.strn_vol_pre*c_I
     self.p_now = None
     self.Strs_dev_now = None # np.zeros((3,3))
     self.r_now = None # np.zeros((3,3))
@@ -79,8 +99,8 @@ class CycLiq:
     self.gtheta = None # scalar, value of interpolation g when lode angle theta
     self.G = None # scalar
     self.K = None # scalar
-    self.strn_vol_ir_pre = 0.
-    self.strn_vol_re_pre = 0.
+    self.strn_vol_ir_pre = a_strn_vol_ir_pre if DEBUG else 0.
+    self.strn_vol_re_pre = a_strn_vol_re_pre if DEBUG else 0.
 
     # Const during whole simulation
     self.c_ein = a_c_ein
@@ -90,23 +110,25 @@ class CycLiq:
     t_sinphi = 3.*self.M_peak/(6.+self.M_peak)
     t_tanphi = t_sinphi/(1.-t_sinphi**2)**0.5
     self.M_peako = 2.*3.**0.5*t_tanphi/(3.+4.*t_tanphi**2)**0.5
-    self.strn_vol_c_0 = -2*c_kappa/(1+self.c_ein)*((self.c_pin/c_pat)**0.5-(c_pmin/c_pat)**0.5)
+    self.strn_vol_c_0 = a_strn_vol_c_0 if DEBUG else -2*c_kappa/(1+self.c_ein)*((self.c_pin/c_pat)**0.5-(c_pmin/c_pat)**0.5)
 
     # Updated with the update of p_pre 
     #   and can be calculated after the definition of the constants above
     self.set_psi()
+    if DEBUG:
+      self.psi = a_psi # difference because of p_pre and trace(sig_all-u)
     self.gtheta = self.get_gtheta(self.r_pre)
     self.set_GK(self.p_pre)
 
     # taken over steps and updated through simulation
-    self.strn_vol_c_pre = 0.
-    self.r_alpha = self.r_pre # reversal point in deviatoric stress point, alpha
-    self.M_max = (1.5*np.tensordot(self.r_pre,self.r_pre))**0.5/self.gtheta
+    self.strn_vol_c_pre = a_strn_vol_c_pre if DEBUG else 0.
+    self.r_alpha = a_r_alpha if DEBUG else self.r_pre # reversal point in deviatoric stress point, alpha
+    self.M_max = a_M_max if DEBUG else (1.5*np.tensordot(self.r_pre,self.r_pre))**0.5/self.gtheta
     if self.M_max<c_tolerance_pmin:
       self.M_max = c_tolerance_pmin
 
-    self.strn_vol_ir_reversal = 0. # the value at last load reversal, used to calc. chi
-    self.gammamono = 0 # shear strain since the last load reversal, used to calc. irreversal dilatancy
+    self.strn_vol_ir_reversal = a_strn_vol_ir_reversal if DEBUG else 0. # the value at last load reversal, used to calc. chi
+    self.gammamono = a_gammamono if DEBUG else 0 # shear strain since the last load reversal, used to calc. irreversal dilatancy
 
     # Most variables are initialized in self.calc_init_classvar() 
     #  which is called in the beginning of every step.
@@ -141,6 +163,7 @@ class CycLiq:
     self.gammamono = None # scalar, init inside constructor?
     '''
 
+    '''
     self.IbunI = np.zeros((3,3,3,3)) # K component of elast. tangent tensor
     self.IIdev = np.zeros((3,3,3,3)) # G component of elast. tangent tensor
 
@@ -175,6 +198,7 @@ class CycLiq:
     self.IIdev[2][2][0][0] = -1./3.
     self.IIdev[2][2][1][1] = -1./3.
     self.IIdev[2][2][2][2] = 2./3.
+    '''
 
     #make sure all the vars in self.calc_init_classvar
   ### } -------------------------------------------
@@ -229,8 +253,8 @@ class CycLiq:
     self.dila_re = None # scalar, dilatancy
     self.dila_ir = None # scalar
     self.chi = None # scalar, releasing reversible dilatancy
-    #self.dila_all = None # scalar
-    self.dila_all = 0. # scalar
+    self.dila_all = None # scalar
+    #self.dila_all = 0. # scalar
     self.loadindex = None # scalar, loading index, L, "lambda", NOT "loadindex"
     self.plast_modul = None # scalar, plastic modulus, H, Kp
     self.Normal = None # np.zeros((3,3))
@@ -293,6 +317,7 @@ class CycLiq:
     #self.p_now = None
     #self.Strs_dev_now = None
     #self.r_now = None
+    self.dila_all = 0
 
   ### -----------------------------------------
   def set_psi(self):
@@ -479,9 +504,11 @@ class CycLiq:
     if self.chi>1.:
       self.chi = 1.
     self.dila_ir = 0
+    '''
     if self.dila_re>0:
       #self.dila_re = (c_dre2*self.chi)**2/self.p_pre
-      self.dila_re = (c_dre2*self.chi)**2/max(self.p_pre,0)
+      self.dila_re = (c_dre2*self.chi)**2/max(self.p_pre,1.)
+    '''
     t1 = c_dir*math.exp(c_nd*self.psi-c_alpha*self.strn_vol_ir_pre)
     t2 = (2/3.)**0.5*np.tensordot(self.r_d-self.r_pre,self.Normal)*math.exp(self.chi)
     t3 = (c_gammadr*(1-math.exp(c_nd*self.psi))/(c_gammadr*(1-math.exp(c_nd*self.psi))+self.gammamono))**2
@@ -499,13 +526,10 @@ class CycLiq:
       else:
         self.dila_ir = t1*t3
     '''
-    strn_vol_ir_pre's'?
-    '''
     '''
     if self.dila_re>0:
       #self.dila_re = (c_dre2*self.chi)**2/self.p_pre
-      self.dila_re = (c_dre2*self.chi)**2/max(self.p_pre,0)
-    '''
+      self.dila_re = (c_dre2*self.chi)**2/max(self.p_pre,1.)
     self.dila_all = self.dila_re+self.dila_ir
 
   ### -----------------------------------------
@@ -602,6 +626,11 @@ class CycLiq:
             break
 
           i_while_CP += 1
+          if self.DEBUG:
+            with open(f'./output_debug/vars_{i_while_CP}.txt', 'w') as f:
+              pprint.pprint(vars(self), stream=f)
+            with open('./output_debug/ld-phi.txt', 'a') as f:
+              f.write(f'{self.loadindex}, {self.phi}\n')
           if i_while_CP > c_max_iteration:
             raise Exception("while_CP")
         # End while

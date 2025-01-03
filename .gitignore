@@ -4,3 +4,6 @@ CycLiqCPSP.h
 
 cycliq_undrained*_output*.txt
 cycliq_undrained*_output*.png
+
+output*/
+legacy/
